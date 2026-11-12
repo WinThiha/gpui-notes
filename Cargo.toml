@@ -1,0 +1,16 @@
+[package]
+name = "notes"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gpui-kit = "0.9.1"
+
+# GPUI precompiles its shaders with fxc.exe (Windows SDK) in release builds.
+# This PC has no SDK, so keep debug assertions on for that one crate: it then
+# compiles the shaders at startup instead, exactly as debug builds do.
+[profile.release.package.gpui-pre-windows]
+debug-assertions = true
+
+[profile.release]
+strip = true
