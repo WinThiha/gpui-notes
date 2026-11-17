@@ -1,0 +1,3 @@
+// Resource 1 is the icon GPUI loads for the window and taskbar; Explorer
+// uses the first icon in the file for notes.exe itself.
+1 ICON "icon.ico"

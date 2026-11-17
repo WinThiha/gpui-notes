@@ -1,0 +1,21 @@
+# Pushing a tag like v0.2.0 builds notes.exe and publishes it as a release,
+# which is what install.ps1 downloads.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update
+      - run: cargo build --release --locked
+      - run: gh release create $env:GITHUB_REF_NAME target/release/notes.exe --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

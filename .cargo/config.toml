@@ -1,0 +1,5 @@
+# GPUI compiles its shaders into the executable with fxc.exe from the Windows
+# SDK. build.ps1 builds a small replacement here for PCs without the SDK.
+# When this file does not exist the setting is ignored and the SDK is used.
+[env]
+GPUI_FXC_PATH = { value = "target/tools/fxc.exe", relative = true }

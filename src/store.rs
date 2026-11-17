@@ -278,6 +278,154 @@ impl Store {
         self.notes.retain(|n| n.path != path);
         Ok(())
     }
+
+    /// Move a note into `folder` (relative to the root, empty for the root).
+    /// A name clash gets a number appended; nothing is overwritten.
+    pub fn move_note(&mut self, path: &Path, folder: &str) -> io::Result<PathBuf> {
+        let dir = self.root.join(folder);
+        if path.parent() == Some(dir.as_path()) {
+            return Ok(path.to_path_buf());
+        }
+        fs::create_dir_all(&dir)?;
+        let (stem, ext) = stem_and_ext(path);
+        let target = unique_file(&dir, &stem, &ext);
+        fs::rename(path, &target)?;
+        // Reloading the one note refreshes its path, folder and title.
+        if let (Some(i), Some(note)) = (self.index_of(path), Note::load(&self.root, target.clone())) {
+            self.notes[i] = note;
+        }
+        Ok(target)
+    }
+
+    /// Copy a note into `folder`. When the name is taken, which is always the
+    /// case inside the same folder, the copy is called "<name> copy".
+    pub fn copy_note(&mut self, path: &Path, folder: &str) -> io::Result<PathBuf> {
+        let dir = self.root.join(folder);
+        fs::create_dir_all(&dir)?;
+        let (stem, ext) = stem_and_ext(path);
+        let mut target = dir.join(format!("{stem}.{ext}"));
+        if target.exists() {
+            target = unique_file(&dir, &format!("{stem} copy"), &ext);
+        }
+        fs::copy(path, &target)?;
+        self.add_loaded(target.clone());
+        Ok(target)
+    }
+
+    /// Copy external `.md` / `.txt` files into `folder`; originals are left
+    /// alone. Files already inside the root are returned as they are. Gives
+    /// the note paths and the number of unsupported files that were skipped.
+    pub fn import(&mut self, files: &[PathBuf], folder: &str) -> io::Result<(Vec<PathBuf>, usize)> {
+        let dir = self.root.join(folder);
+        fs::create_dir_all(&dir)?;
+        let (mut notes, mut skipped) = (Vec::new(), 0);
+        for file in files {
+            if !file.is_file() || !is_note_file(file) {
+                skipped += 1;
+            } else if self.index_of(file).is_some() {
+                notes.push(file.clone());
+            } else {
+                let (stem, ext) = stem_and_ext(file);
+                let target = unique_file(&dir, &stem, &ext);
+                fs::copy(file, &target)?;
+                self.add_loaded(target.clone());
+                notes.push(target);
+            }
+        }
+        Ok((notes, skipped))
+    }
+
+    /// Rename the last segment of `folder`. Returns the new relative path.
+    pub fn rename_folder(&mut self, folder: &str, new_name: &str) -> io::Result<String> {
+        let name = sanitize(new_name);
+        if name.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty name"));
+        }
+        let parent = folder.rsplit_once('/').map_or("", |(parent, _)| parent);
+        let new_folder = join_folder(parent, &name);
+        if new_folder == folder {
+            return Ok(new_folder);
+        }
+        // A change of letter case only is the same folder on Windows.
+        if !new_folder.eq_ignore_ascii_case(folder) && self.root.join(&new_folder).exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "a folder with that name already exists",
+            ));
+        }
+        fs::rename(self.root.join(folder), self.root.join(&new_folder))?;
+        self.reload();
+        Ok(new_folder)
+    }
+
+    /// Move `folder` with its contents into the folder `into` ("" = root).
+    /// Returns the folder's new relative path.
+    pub fn move_folder(&mut self, folder: &str, into: &str) -> io::Result<String> {
+        let name = folder.rsplit('/').next().unwrap_or(folder);
+        if into == folder || into.strip_prefix(folder).is_some_and(|r| r.starts_with('/')) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a folder cannot be moved into itself",
+            ));
+        }
+        let new_folder = join_folder(into, name);
+        if new_folder == folder {
+            return Ok(new_folder);
+        }
+        if self.root.join(&new_folder).exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "a folder with that name already exists there",
+            ));
+        }
+        fs::rename(self.root.join(folder), self.root.join(&new_folder))?;
+        self.reload();
+        Ok(new_folder)
+    }
+
+    /// Move a whole folder into the root's `.trash`, like `delete` does for notes.
+    pub fn delete_folder(&mut self, folder: &str) -> io::Result<()> {
+        let trash = self.root.join(".trash");
+        fs::create_dir_all(&trash)?;
+        let name = folder.rsplit('/').next().unwrap_or(folder);
+        let mut target = trash.join(name);
+        let mut n = 2;
+        while target.exists() {
+            target = trash.join(format!("{n} {name}"));
+            n += 1;
+        }
+        fs::rename(self.root.join(folder), target)?;
+        self.reload();
+        Ok(())
+    }
+
+    /// Load a freshly written file into the index.
+    fn add_loaded(&mut self, path: PathBuf) {
+        if let Some(note) = Note::load(&self.root, path) {
+            self.notes.push(note);
+            self.sort();
+        }
+    }
+}
+
+fn stem_and_ext(path: &Path) -> (String, String) {
+    let part = |s: Option<&std::ffi::OsStr>| s.unwrap_or_default().to_string_lossy().into_owned();
+    (part(path.file_stem()), part(path.extension()))
+}
+
+/// `dir/<stem>.<ext>`, or with " 2", " 3"… appended to the stem until unused.
+fn unique_file(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let mut path = dir.join(format!("{stem}.{ext}"));
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("{stem} {n}.{ext}"));
+        n += 1;
+    }
+    path
+}
+
+fn join_folder(parent: &str, name: &str) -> String {
+    if parent.is_empty() { name.to_string() } else { format!("{parent}/{name}") }
 }
 
 fn is_note_file(path: &Path) -> bool {
